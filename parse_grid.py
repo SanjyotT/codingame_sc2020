@@ -3,7 +3,7 @@ import time
 
 
 def p(*args, **kwargs):
-    return print(args, kwargs, file=sys.stderr)
+    return print(*args, **kwargs, file=sys.stderr)
 
 
 # Define map object which stores x, y coordinate and if wall is present or floor
@@ -44,6 +44,11 @@ class Node:
         self.rpel = None
         self.upel = None
         self.dpel = None
+
+
+class Edge:
+    def __init__(self):
+        pass
 
 
 class Maze:
@@ -101,10 +106,8 @@ class Maze:
             for x in range(self.w):
                 self.node_plan[(x, y)] = 0
                 if self.is_floor(x, y):
-                    if self.conn_count(x, y) > 2:
-                        # Create node
+                    if self.conn_count(x, y) in [1, 3, 4]:
                         self.node_plan[(x, y)] = 1
-                        # TODO: Create terminal nodes
 
     # TODO: Node linking algorithm
     # TODO: Node traversal algorithm
@@ -112,8 +115,8 @@ class Maze:
     def print_nodes(self):
         for y in range(self.h):
             for x in range(self.w):
-                print(self.node_plan[(x, y)], file=sys.stderr, end=' ')
-            print('\n', file=sys.stderr, end=' ')
+                p(self.node_plan[(x, y)], end=' ')
+            p('\n', end=' ')
 
 
 if __name__ == '__main__':
@@ -124,7 +127,7 @@ if __name__ == '__main__':
     m.parse()
     maze = Maze(width, height, m.floor_plan)
     maze.construct()
-    print(f'Time taken: {round(time.time() - t0, 5)}s', file=sys.stderr)
+    p(f'Time taken: {round(time.time() - t0, 5)}s')
     maze.print_nodes()
 
 
