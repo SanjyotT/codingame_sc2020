@@ -104,6 +104,10 @@ class Maze:
                     if self.conn_count(x, y) > 2:
                         # Create node
                         self.node_plan[(x, y)] = 1
+                        # TODO: Create terminal nodes
+
+    # TODO: Node linking algorithm
+    # TODO: Node traversal algorithm
 
     def print_nodes(self):
         for y in range(self.h):
