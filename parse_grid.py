@@ -32,23 +32,33 @@ class Map:
 
 
 class Node:
-    def __init__(self, x, y, id):
+    def __init__(self, id, x, y, type):
         self.id = id
         self.x = x
         self.y = y
+        self.type = type
         self.l = None
         self.r = None
         self.u = None
         self.d = None
-        self.lpel = None
-        self.rpel = None
-        self.upel = None
-        self.dpel = None
+
+    def __getitem__(self, item):
+        return self.__dict__[item]
+
+    def __setitem__(self, key, value):
+        self.__dict__[key] = value
+
+    def __eq__(self, other):
+        return self.id == other.id
 
 
 class Edge:
-    def __init__(self):
-        pass
+    def __init__(self, node, dir):
+        self.node1 = node
+        self.dir1 = dir
+        self.node2 = None
+        self.dir2 = None
+        self.path = list()
 
 
 class Maze:
@@ -56,40 +66,53 @@ class Maze:
         self.w = w
         self.h = h
         self.floor_plan = floor_plan
-        self.node_plan = dict()
-        self.dirs = ['left', 'down', 'right', 'up']
+        self.dirs = ['l', 'd', 'r', 'u']
+        self.node_count = 0
+        self.nodes = dict()
+
+    @staticmethod
+    def inverse_dir(dir):
+        inverse_dict = {
+            'l': 'r',
+            'r': 'l',
+            'u': 'd',
+            'd': 'u'
+        }
+        return inverse_dict[dir]
 
     def is_floor(self, x, y):
         return self.floor_plan[(x, y)] == ' '
 
-    def check_way(self, x, y, dir):
+    def get_coord(self, x, y, dir):
 
-        if dir == 'left':
+        if dir == 'l':
             if x == 0:
-                return self.is_floor(x + self.w - 1, y)
+                return x + self.w - 1, y  # Wrap around the left edge
             else:
-                return self.is_floor(x - 1, y)
+                return x - 1, y
 
-        elif dir == 'right':
+        elif dir == 'r':
             if x == self.w - 1:
-                return self.is_floor(0, y)
+                return 0, y  # Wrap around the right edge
             else:
-                return self.is_floor(x + 1, y)
+                return x + 1, y
 
-        elif dir == 'up':
+        elif dir == 'u':
             if y == 0:
-                return False
+                return x, y  # If at upper edge, return current position
             else:
-                return self.is_floor(x, y - 1)
+                return x, y - 1
 
-        elif dir == 'down':
+        elif dir == 'd':
             if y == self.h - 1:
-                return False
+                return x, y  # If at bottom edge, return current position
             else:
-                return self.is_floor(x, y + 1)
-
+                return x, y + 1
         else:
             p(f'Invalid direction: {dir}')
+
+    def check_way(self, x, y, dir):
+        return self.is_floor(*self.get_coord(x, y, dir))
 
     def conn_count(self, x, y):
         if not self.is_floor(x, y):
@@ -101,22 +124,94 @@ class Maze:
                 count += 1
         return count
 
-    def construct(self):
+    def get_available_dirs(self, x, y):
+        available_dirs = list()
+        for dir in self.dirs:
+            if self.check_way(x, y, dir):
+                available_dirs.append(dir)
+        return available_dirs
+
+    def construct_nodes(self):
         for y in range(self.h):
             for x in range(self.w):
-                self.node_plan[(x, y)] = 0
                 if self.is_floor(x, y):
-                    if self.conn_count(x, y) in [1, 3, 4]:
-                        self.node_plan[(x, y)] = 1
+                    if self.conn_count(x, y) == 1:
+                        # Create terminal node
+                        self.nodes[(x, y)] = Node(self.node_count, x, y, 'terminal')
 
-    # TODO: Node linking algorithm
-    # TODO: Node traversal algorithm
+                        p(f"Constructing node at ({x}, {y})")
 
-    def print_nodes(self):
-        for y in range(self.h):
-            for x in range(self.w):
-                p(self.node_plan[(x, y)], end=' ')
-            p('\n', end=' ')
+                        self.node_count += 1
+                    elif self.conn_count(x, y) > 2:
+                        # Create joint node
+                        self.nodes[(x, y)] = Node(self.node_count, x, y, 'joint')
+
+                        p(f"Constructing node at ({x}, {y})")
+
+                        self.node_count += 1
+
+    def traverse(self, node, dir):
+        # Returns Edge object connecting `node` to a new node found by traversing along the `dir` direction
+
+        # New Edge creation
+        e = Edge(node, dir)
+
+        # Attach this Edge to the current Node's `dir`
+        node[dir] = e
+
+        x, y = node.x, node.y
+        available_dirs = self.get_available_dirs(x, y)
+
+        # Traverse till we find the next node
+        this_dir = dir
+        while True:
+            # Get new x and y
+            new_x, new_y = self.get_coord(x, y, this_dir)
+
+            # If new x, y have a node, update Edge, new node, and break
+            if self.nodes.get((new_x, new_y)) is not None:
+                other_node = self.nodes.get((new_x, new_y))
+                e.path.append((new_x, new_y))
+
+                # Update edge
+                e.node2 = other_node
+                e.dir2 = self.inverse_dir(this_dir)
+
+                # Update the other node for this new Edge connection
+                other_node[self.inverse_dir(this_dir)] = e
+
+                break
+
+            # Append new x, y to path, update x, y
+            e.path.append((new_x, new_y))
+            # TODO: Update other edge attributes like distance and pellets
+
+            x, y = new_x, new_y
+
+            # Choose dir
+            available_dirs = self.get_available_dirs(x, y)
+            if this_dir in available_dirs:
+                continue
+            else:
+                new_dir_candidates = list(set(available_dirs) - set(self.inverse_dir(this_dir)))
+                this_dir = new_dir_candidates[0]
+
+        p(f"Constructing edge from ({e.node1.x},{e.node1.y}) to ({e.node2.x},{e.node2.y})")
+
+        return
+
+    def construct_edges(self):
+        # Loop over all nodes and connect them to Edge objects
+        for key in self.nodes:
+            x, y = key
+            node = self.nodes.get(key)
+            traversible_dirs = [dir for dir in self.dirs  # l, r, u, d
+                                if self.check_way(x, y, dir)  # Only directions without wall
+                                and node[dir] is None]  # Only directions not assigned an Edge yet
+
+            for dir in traversible_dirs:
+                self.traverse(node, dir)
+        return
 
 
 if __name__ == '__main__':
@@ -126,9 +221,9 @@ if __name__ == '__main__':
     t0 = time.time()
     m.parse()
     maze = Maze(width, height, m.floor_plan)
-    maze.construct()
+    maze.construct_nodes()
+    maze.construct_edges()
     p(f'Time taken: {round(time.time() - t0, 5)}s')
-    maze.print_nodes()
 
 
 
