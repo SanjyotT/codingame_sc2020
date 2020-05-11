@@ -334,6 +334,7 @@ if __name__ == '__main__':
         # Update all game stats
         game, maze, my_pacs, en_pacs = game_loop_update(turn_id, game, maze, my_pacs, en_pacs)
         maze.update_pellet_values()
+        # TODO: Implement greedy edge traversal
 
         p(f"Turn: {turn_id} | Total pellets: {maze.total_pellets}")
 
