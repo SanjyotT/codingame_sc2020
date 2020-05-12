@@ -1,7 +1,7 @@
 import sys
 import time
 import math
-
+import random
 
 def p(*args, **kwargs):
     return print(*args, **kwargs, file=sys.stderr)
@@ -355,7 +355,15 @@ class Controller:
             p(f'Pac at Node({node.x}, {node.y})')
 
             edges = [node[d] for d in maze.dirs if node[d] is not None]
-            best_edge = max(edges, key=lambda x: float(x.pellets)/float(x.length))
+            pellets_in_edges = [edge.pellets for edge in edges]
+
+            # If all edges have zero pellets, get random point with a pellet and move to it
+            if sum(pellets_in_edges) == 0:
+                best_edge = random.choice(edges)
+                p(f'All side edges have 0 pellets. Moving to random edge')
+
+            else:
+                best_edge = max(edges, key=lambda x: float(x.pellets))
 
             p(f'Pac best edge: ({best_edge.node1.x}, {best_edge.node1.y}) -> ({best_edge.node2.x}, {best_edge.node2.y})')
 
@@ -459,7 +467,7 @@ if __name__ == '__main__':
         game, maze, my_pacs, en_pacs = game_loop_update(turn_id, game, maze, my_pacs, en_pacs)
         maze.update_pellet_values()
 
-        # TODO: Implement greedy edge traversal
+        # TODO: Implement multi-edge greedy traverse
 
         for pac_id, pac in my_pacs.items():
             con.greedy_edge_traverse(pac, maze)
