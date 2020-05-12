@@ -324,27 +324,48 @@ class Controller:
                     break
         pac.current_dest = (closest_node.x, closest_node.y)
         pac.default_move_to_dest()
-        p(f"Moving pac {pac.id} to closest node: ({closest_node.x}, {closest_node.y})")
+        p(f"Moving pac {pac.id} to closest joint node: ({closest_node.x}, {closest_node.y})")
 
     def greedy_edge_traverse(self, pac, maze):
 
         # If Pac not at a node, move to closest node
         pac_loc = (pac.x, pac.y)
+
+        p(f'Pac at ({pac.x}, {pac.y})')
+
         if pac_loc not in maze.nodes:
+
+            p(f'Pac not at a node')
+
             if not pac.travel_queue:
+
+                p(f'Pac travel queue empty so moving to closest joint node')
+
                 self.move_pac_to_closest_node(pac, maze)
             else:
+
+                p(f'Pac continues on travel queue')
+
                 pac.move_on_travel_queue()
         else:
+
             # Calculate edge with highest pellet rate for the current node
             node = maze.nodes[pac_loc]
+
+            p(f'Pac at Node({node.x}, {node.y})')
+
             edges = [node[d] for d in maze.dirs if node[d] is not None]
             best_edge = max(edges, key=lambda x: float(x.pellets)/float(x.length))
+
+            p(f'Pac best edge: ({best_edge.node1.x}, {best_edge.node1.y}) -> ({best_edge.node2.x}, {best_edge.node2.y})')
 
             if best_edge.node1 == node:
                 travel_queue = best_edge.path
             else:
                 travel_queue = list(reversed(best_edge.path))
+                travel_queue.append((best_edge.node1.x, best_edge.node1.y))  # To construct queue till next node
+
+            p(f'New travel queue: {travel_queue}')
 
             pac.travel_queue = travel_queue
             pac.move_on_travel_queue()
