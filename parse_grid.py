@@ -1,12 +1,12 @@
 import sys
 import time
+import math
 
 
 def p(*args, **kwargs):
     return print(*args, **kwargs, file=sys.stderr)
 
 
-# Define map object which stores x, y coordinate and if wall is present or floor
 class Map:
     def __init__(self, w, h):
         self.w = w
@@ -29,6 +29,14 @@ class Map:
         for r in self.rows:
             s += r + '\n'
         return s.strip('\n')
+
+
+class Game:
+    def __init__(self):
+        self.my_score = 0
+        self.opponent_score = 0
+        self.visible_pac_count = 0
+        self.visible_pellet_count = 0
 
 
 class Node:
@@ -242,39 +250,76 @@ class Pac:
         self.type_id = type_id
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
+        self.current_dest = None
+
+    def default_move_to_dest(self):
+        if self.current_dest is None:
+            return
+
+        if (self.x, self.y) == self.current_dest:
+            self.current_dest = None
+            return
+        else:
+            print(f'MOVE {self.id} {self.current_dest[0]} {self.current_dest[1]}')
 
 
-class Game:
+class Controller:
+
     def __init__(self):
-        self.my_score = 0
-        self.opponent_score = 0
-        self.visible_pac_count = 0
-        self.visible_pellet_count = 0
+        pass
+
+    @staticmethod
+    def move_pac_to_closest_node(pac, maze):
+        pac_loc = (pac.x, pac.y)
+        closest_node = None
+
+        # Check if `pac` is already on a node
+        if pac_loc in maze.nodes:
+            closest_node = maze.nodes[pac_loc]
+            return
+
+        # Otherwise check which edge the `pac` is on
+        else:
+            for edge_id, e in maze.edges.items():
+                if pac_loc in e.path:
+                    if e.path.index(pac_loc) < math.floor(len(e.path)/2.0):
+                        closest_node = e.node1
+                    else:
+                        closest_node = e.node2
+                    break
+        pac.current_dest = (closest_node.x, closest_node.y)
+        pac.default_move_to_dest()
+        p(f"Moving pac {pac.id} to closest node: ({closest_node.x}, {closest_node.y})")
 
 
 def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs):
 
     for i in range(visible_pac_count):
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
-        pac_id = int(pac_id)
-        mine = mine != "0"
-        if (pac_id not in my_pacs) and (pac_id not in en_pacs):
-            if mine:
+        pac_id, mine, x, y = map(int, (pac_id, mine, x, y))
+        mine = mine == 1
+        if mine:
+            # My pac
+            if pac_id not in my_pacs:
                 my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
             else:
-                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
-        elif pac_id in my_pacs:
-            this_pac = my_pacs[pac_id]
-            this_pac.x = x
-            this_pac.y = y
-            this_pac.speed_turns_left = speed_turns_left
-            this_pac.ability_cooldown = ability_cooldown
+                # Pac in my pacs
+                this_pac = my_pacs[pac_id]
+                this_pac.x = x
+                this_pac.y = y
+                this_pac.speed_turns_left = speed_turns_left
+                this_pac.ability_cooldown = ability_cooldown
         else:
-            this_pac = en_pacs[pac_id]
-            this_pac.x = x
-            this_pac.y = y
-            this_pac.speed_turns_left = speed_turns_left
-            this_pac.ability_cooldown = ability_cooldown
+            # Enemy pac
+            if pac_id not in en_pacs:
+                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
+            else:
+                # Pac in enemy pacs
+                this_pac = en_pacs[pac_id]
+                this_pac.x = x
+                this_pac.y = y
+                this_pac.speed_turns_left = speed_turns_left
+                this_pac.ability_cooldown = ability_cooldown
 
     return my_pacs, en_pacs
 
@@ -323,6 +368,7 @@ if __name__ == '__main__':
     maze.construct_edges()
 
     game = Game()
+    con = Controller()
     my_pacs = dict()
     en_pacs = dict()
 
@@ -334,14 +380,16 @@ if __name__ == '__main__':
         # Update all game stats
         game, maze, my_pacs, en_pacs = game_loop_update(turn_id, game, maze, my_pacs, en_pacs)
         maze.update_pellet_values()
+
         # TODO: Implement greedy edge traversal
 
-        p(f"Turn: {turn_id} | Total pellets: {maze.total_pellets}")
+        for pac_id, pac in my_pacs.items():
+            con.move_pac_to_closest_node(pac, maze)
 
-        # Process
 
         # MOVE <pacId> <x> <y>
-        print("MOVE 0 15 10")
+        # print("MOVE 0 15 10")
+
 
 
         turn_id += 1
