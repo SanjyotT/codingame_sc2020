@@ -251,16 +251,40 @@ class Pac:
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
         self.current_dest = None
+        self.travel_queue = list()
+
+    def move(self, x, y):
+        print(f'MOVE {self.id} {x} {y}')
+
+    def stay(self):
+        self.move(self.x, self.y)
 
     def default_move_to_dest(self):
         if self.current_dest is None:
-            return
+            self.stay()
 
         if (self.x, self.y) == self.current_dest:
             self.current_dest = None
-            return
+            self.stay()
+
         else:
-            print(f'MOVE {self.id} {self.current_dest[0]} {self.current_dest[1]}')
+            self.move(self.current_dest[0], self.current_dest[1])
+
+    def move_on_travel_queue(self):
+        if not self.travel_queue:
+            self.stay()
+        else:
+            try:
+                current_index = self.travel_queue.index((self.x, self.y))
+            except ValueError:
+                # This means travel queue starts from the point just next to current node, hence current index -1
+                current_index = -1
+
+            if current_index == len(self.travel_queue) - 1:
+                self.travel_queue = []
+                self.stay()
+            else:
+                self.move(*self.travel_queue[current_index + 1])
 
 
 class Controller:
@@ -273,8 +297,11 @@ class Controller:
         pac_loc = (pac.x, pac.y)
         closest_node = None
 
-        # Check if `pac` is already on a node
-        if pac_loc in maze.nodes:
+        # Only go to the closest joint node, and not terminal nodes
+        joint_nodes = [(maze.nodes[n].x, maze.nodes[n].y) for n in maze.nodes if maze.nodes[n].type == 'joint']
+
+        # Check if `pac` is already on a joint node
+        if pac_loc in joint_nodes:
             closest_node = maze.nodes[pac_loc]
             return
 
@@ -282,18 +309,48 @@ class Controller:
         else:
             for edge_id, e in maze.edges.items():
                 if pac_loc in e.path:
-                    if e.path.index(pac_loc) < math.floor(len(e.path)/2.0):
+                    if e.node1.type == 'terminal':
+                        # If one node is terminal, move towards other (which will be joint)
+                        closest_node = e.node2
+                    elif e.node2.type == 'terminal':
+                        # If one node is terminal, move towards other (which will be joint)
+                        closest_node = e.node1
+                    elif e.path.index(pac_loc) < math.floor(len(e.path) / 2.0):
+                        # Closest node is on the half side of the edge the pac is in
                         closest_node = e.node1
                     else:
+                        # Closest node is on the half side of the edge the pac is in
                         closest_node = e.node2
                     break
         pac.current_dest = (closest_node.x, closest_node.y)
         pac.default_move_to_dest()
         p(f"Moving pac {pac.id} to closest node: ({closest_node.x}, {closest_node.y})")
 
+    def greedy_edge_traverse(self, pac, maze):
+
+        # If Pac not at a node, move to closest node
+        pac_loc = (pac.x, pac.y)
+        if pac_loc not in maze.nodes:
+            if not pac.travel_queue:
+                self.move_pac_to_closest_node(pac, maze)
+            else:
+                pac.move_on_travel_queue()
+        else:
+            # Calculate edge with highest pellet rate for the current node
+            node = maze.nodes[pac_loc]
+            edges = [node[d] for d in maze.dirs if node[d] is not None]
+            best_edge = max(edges, key=lambda x: float(x.pellets)/float(x.length))
+
+            if best_edge.node1 == node:
+                travel_queue = best_edge.path
+            else:
+                travel_queue = list(reversed(best_edge.path))
+
+            pac.travel_queue = travel_queue
+            pac.move_on_travel_queue()
+
 
 def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs):
-
     for i in range(visible_pac_count):
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
         pac_id, mine, x, y = map(int, (pac_id, mine, x, y))
@@ -384,12 +441,9 @@ if __name__ == '__main__':
         # TODO: Implement greedy edge traversal
 
         for pac_id, pac in my_pacs.items():
-            con.move_pac_to_closest_node(pac, maze)
-
+            con.greedy_edge_traverse(pac, maze)
 
         # MOVE <pacId> <x> <y>
         # print("MOVE 0 15 10")
-
-
 
         turn_id += 1
