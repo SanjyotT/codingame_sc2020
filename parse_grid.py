@@ -37,6 +37,15 @@ class Game:
         self.opponent_score = 0
         self.visible_pac_count = 0
         self.visible_pellet_count = 0
+        self.command_queue = list()
+
+    def add_command(self, command):
+        self.command_queue.append(command)  # Command is MOVE string for one pac
+
+    def publish(self):
+        publish_str = ' | '.join([x.strip() for x in self.command_queue])
+        print(publish_str)
+        self.command_queue = list()
 
 
 class Node:
@@ -243,18 +252,19 @@ class Maze:
 
 
 class Pac:
-    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown):
+    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown, game):
         self.id = id
         self.x = x
         self.y = y
         self.type_id = type_id
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
+        self.game = game
         self.current_dest = None
         self.travel_queue = list()
 
     def move(self, x, y):
-        print(f'MOVE {self.id} {x} {y}')
+        self.game.command_queue.append(f'MOVE {self.id} {x} {y}')
 
     def stay(self):
         self.move(self.x, self.y)
@@ -303,7 +313,6 @@ class Controller:
         # Check if `pac` is already on a joint node
         if pac_loc in joint_nodes:
             closest_node = maze.nodes[pac_loc]
-            return
 
         # Otherwise check which edge the `pac` is on
         else:
@@ -379,7 +388,7 @@ class Controller:
             pac.move_on_travel_queue()
 
 
-def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs):
+def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game):
     for i in range(visible_pac_count):
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
         pac_id, mine, x, y = map(int, (pac_id, mine, x, y))
@@ -387,7 +396,7 @@ def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs):
         if mine:
             # My pac
             if pac_id not in my_pacs:
-                my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
+                my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game)
             else:
                 # Pac in my pacs
                 this_pac = my_pacs[pac_id]
@@ -398,7 +407,7 @@ def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs):
         else:
             # Enemy pac
             if pac_id not in en_pacs:
-                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
+                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game)
             else:
                 # Pac in enemy pacs
                 this_pac = en_pacs[pac_id]
@@ -426,7 +435,7 @@ def game_loop_update(turn_id, game, maze, my_pacs, en_pacs):
     game.opponent_score = opponent_score
     game.visible_pac_count = visible_pac_count
 
-    my_pacs, en_pacs = game_loop_pac_update(visible_pac_count, my_pacs, en_pacs)
+    my_pacs, en_pacs = game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game)
 
     visible_pellet_count = int(input())  # all pellets in sight
     game.visible_pellet_count = visible_pellet_count
@@ -472,7 +481,5 @@ if __name__ == '__main__':
         for pac_id, pac in my_pacs.items():
             con.greedy_edge_traverse(pac, maze)
 
-        # MOVE <pacId> <x> <y>
-        # print("MOVE 0 15 10")
-
+        game.publish()
         turn_id += 1
