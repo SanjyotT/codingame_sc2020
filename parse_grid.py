@@ -3,6 +3,7 @@ import time
 import math
 import random
 
+
 def p(*args, **kwargs):
     return print(*args, **kwargs, file=sys.stderr)
 
@@ -93,6 +94,7 @@ class Maze:
         self.edges = dict()  # edge_id -> Edge()
         self.pellet_dict = dict()  # (x, y) -> pellet value
         self.total_pellets = 0
+        self.pac_locations = list()
 
     @staticmethod
     def inverse_dir(dir):
@@ -186,7 +188,9 @@ class Maze:
         # Attach this Edge to the current Node's `dir`
         node[dir] = e
 
+        # Attach the (x, y) of current node as first point in the edge path
         x, y = node.x, node.y
+        e.path.append((x, y))
 
         # Traverse till we find the next node
         this_dir = dir
@@ -250,9 +254,14 @@ class Maze:
                     pass
             e.pellets = pellets
 
+    def update_pac_locations(self, my_pacs, en_pacs):
+        my_pac_locations = [(pac.x, pac.y) for id, pac in my_pacs.items()]
+        en_pac_locations = [(pac.x, pac.y) for id, pac in en_pacs.items()]
+        self.pac_locations = my_pac_locations + en_pac_locations
+
 
 class Pac:
-    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown, game):
+    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze):
         self.id = id
         self.x = x
         self.y = y
@@ -260,8 +269,11 @@ class Pac:
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
         self.game = game
+        self.maze = maze
         self.current_dest = None
         self.travel_queue = list()
+        self.decision_recursion_limit = 3
+        self.decision_counter = 0
 
     def move(self, x, y):
         self.game.command_queue.append(f'MOVE {self.id} {x} {y}')
@@ -269,18 +281,13 @@ class Pac:
     def stay(self):
         self.move(self.x, self.y)
 
-    def default_move_to_dest(self):
-        if self.current_dest is None:
-            self.stay()
-
-        if (self.x, self.y) == self.current_dest:
-            self.current_dest = None
-            self.stay()
-
-        else:
-            self.move(self.current_dest[0], self.current_dest[1])
-
     def move_on_travel_queue(self):
+        self.decision_counter += 1
+        if self.decision_counter == self.decision_recursion_limit:
+            self.decision_counter = 0
+            self.stay()  # So that pac does not get stuck in infinite loop while having pacs on both of its sides
+            return
+
         if not self.travel_queue:
             self.stay()
         else:
@@ -290,11 +297,27 @@ class Pac:
                 # This means travel queue starts from the point just next to current node, hence current index -1
                 current_index = -1
 
+            # If already at destination, stay and reset travel queue
             if current_index == len(self.travel_queue) - 1:
                 self.travel_queue = []
                 self.stay()
+                self.decision_counter = 0
             else:
-                self.move(*self.travel_queue[current_index + 1])
+                # If next cell or next-to-next cell contain a pac, reverse direction
+                next_cell = self.travel_queue[current_index + 1]
+                try:
+                    next_to_next_cell = self.travel_queue[current_index + 2]
+                except IndexError:
+                    next_to_next_cell = next_cell
+
+                if (next_cell in self.maze.pac_locations) or (next_to_next_cell in self.maze.pac_locations):
+                    self.travel_queue = list(reversed(self.travel_queue))  # Reverse path
+                    self.move_on_travel_queue()
+
+                # Otherwise proceed to next cell
+                else:
+                    self.move(*next_cell)
+                    self.decision_counter = 0
 
 
 class Controller:
@@ -302,8 +325,7 @@ class Controller:
     def __init__(self):
         pass
 
-    @staticmethod
-    def move_pac_to_closest_node(pac, maze):
+    def move_pac_to_closest_node(self, pac, maze):
         pac_loc = (pac.x, pac.y)
         closest_node = None
 
@@ -312,7 +334,7 @@ class Controller:
 
         # Check if `pac` is already on a joint node
         if pac_loc in joint_nodes:
-            closest_node = maze.nodes[pac_loc]
+            self.greedy_edge_traverse(pac, maze)
 
         # Otherwise check which edge the `pac` is on
         else:
@@ -320,20 +342,20 @@ class Controller:
                 if pac_loc in e.path:
                     if e.node1.type == 'terminal':
                         # If one node is terminal, move towards other (which will be joint)
-                        closest_node = e.node2
+                        travel_queue = e.path
                     elif e.node2.type == 'terminal':
                         # If one node is terminal, move towards other (which will be joint)
-                        closest_node = e.node1
+                        travel_queue = list(reversed(e.path))
                     elif e.path.index(pac_loc) < math.floor(len(e.path) / 2.0):
                         # Closest node is on the half side of the edge the pac is in
-                        closest_node = e.node1
+                        travel_queue = list(reversed(e.path))
                     else:
                         # Closest node is on the half side of the edge the pac is in
-                        closest_node = e.node2
+                        travel_queue = e.path
                     break
-        pac.current_dest = (closest_node.x, closest_node.y)
-        pac.default_move_to_dest()
-        p(f"Moving pac {pac.id} to closest joint node: ({closest_node.x}, {closest_node.y})")
+        p(f'Pac({pac.x}, {pac.y}) travel queue: {travel_queue}')
+        pac.travel_queue = travel_queue
+        pac.move_on_travel_queue()
 
     def greedy_edge_traverse(self, pac, maze):
 
@@ -380,7 +402,6 @@ class Controller:
                 travel_queue = best_edge.path
             else:
                 travel_queue = list(reversed(best_edge.path))
-                travel_queue.append((best_edge.node1.x, best_edge.node1.y))  # To construct queue till next node
 
             p(f'New travel queue: {travel_queue}')
 
@@ -388,7 +409,8 @@ class Controller:
             pac.move_on_travel_queue()
 
 
-def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game):
+def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game, maze):
+
     for i in range(visible_pac_count):
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
         pac_id, mine, x, y = map(int, (pac_id, mine, x, y))
@@ -396,7 +418,7 @@ def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game):
         if mine:
             # My pac
             if pac_id not in my_pacs:
-                my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game)
+                my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze)
             else:
                 # Pac in my pacs
                 this_pac = my_pacs[pac_id]
@@ -407,7 +429,7 @@ def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game):
         else:
             # Enemy pac
             if pac_id not in en_pacs:
-                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game)
+                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze)
             else:
                 # Pac in enemy pacs
                 this_pac = en_pacs[pac_id]
@@ -415,6 +437,9 @@ def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game):
                 this_pac.y = y
                 this_pac.speed_turns_left = speed_turns_left
                 this_pac.ability_cooldown = ability_cooldown
+
+    # Store pac locations in maze object (which will help pac avoid collisions by making it pac aware)
+    maze.update_pac_locations(my_pacs, en_pacs)
 
     return my_pacs, en_pacs
 
@@ -435,7 +460,7 @@ def game_loop_update(turn_id, game, maze, my_pacs, en_pacs):
     game.opponent_score = opponent_score
     game.visible_pac_count = visible_pac_count
 
-    my_pacs, en_pacs = game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game)
+    my_pacs, en_pacs = game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game, maze)
 
     visible_pellet_count = int(input())  # all pellets in sight
     game.visible_pellet_count = visible_pellet_count
