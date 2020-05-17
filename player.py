@@ -16,7 +16,6 @@ class Commander:
         self.command_queue.append(command)
 
     def publish(self):
-        self.command_queue = [x for x in self.command_queue if x is not None]
         publish_str = ' | '.join([x.strip() for x in self.command_queue])
         print(publish_str)
         self.command_queue = list()
@@ -293,11 +292,8 @@ class Pac:
         self.con = con
         self.my_pacs = None
         self.en_pacs = None
-
-        self.current_dest = None
+        self.debug = False
         self.travel_queue = list()
-        self.decision_recursion_limit = 3
-        self.decision_counter = 0
         self.stronger_type = {'ROCK': 'PAPER', 'PAPER': 'SCISSORS', 'SCISSORS': 'ROCK'}
         self.accepting_commands = True  # This is turned False when Pac is on kill mode in a terminal edge
 
@@ -317,14 +313,18 @@ class Pac:
         return abs(self.x - x) + abs(self.y - y)
 
     def get_next_cell(self):
-        p(f'Current travel queue: {self.travel_queue}')
+        if not self.travel_queue:
+            new_queue = self.con.simple_greedy_edge(self)
+            self.set_travel_queue(new_queue)
+            if self.debug: p(f'Game start, no next cell to fetch, new queue: {new_queue}')
+
         current_index = self.travel_queue.index((self.x, self.y))
 
         # If already at destination, stay at same location (also become receptive to commands)
         if current_index == len(self.travel_queue) - 1:
             self.accepting_commands = True
             self.set_travel_queue([])
-            return self.travel_queue[current_index]
+            return self.x, self.y
 
         # Move forward
         else:
@@ -338,13 +338,21 @@ class Pac:
         self.travel_queue = list(reversed(self.travel_queue))
 
     def follow_travel_queue(self):
+        """ If self in mid of current travel queue, follow it
+        Otherwise, request a new travel queue from controller
+        """
 
         if not self.travel_queue:
-            return self.stay()
-        else:
-            return self._move(*self.get_next_cell())
+            # Request for new travel queue from controller
 
-    def enemy_routine(self, en_pacs, debug=False):
+            new_queue = self.con.simple_greedy_edge(self)
+            self.set_travel_queue(new_queue)
+
+            if self.debug: p(f'Travel queue empty; new queue: {new_queue}')
+
+        return self._move(*self.get_next_cell())
+
+    def enemy_routine(self, en_pacs):
         """ Decide what to do if an enemy is in 2 distance vicinity """
 
         # If surrounded by more than 2 enemy pacs, stay
@@ -387,47 +395,47 @@ class Pac:
                 on_joint_node = False
 
         # At this point we have, `on_edge`, `on_terminal_edge`, `on_joint`, `current_edge`, `current_node`
-        if debug: p(f'on_edge: {on_edge} on_terminal_edge: {on_terminal_edge} on_joint_node: {on_joint_node}')
+        if self.debug: p(f'on_edge: {on_edge} on_terminal_edge: {on_terminal_edge} on_joint_node: {on_joint_node}')
 
 
         # If enemy is stronger
         if en_pac.type_id == self.stronger_type[self.type_id]:
 
-            if debug: p(f'Enemy strong')
+            if self.debug: p(f'Enemy strong')
 
             # If self in terminal edge or on terminal node
             if on_terminal_edge or (not on_edge and not on_joint_node):
 
-                if debug: p(f'In terminal edge or terminal node')
+                if self.debug: p(f'In terminal edge or terminal node')
 
                 # If enemy pac on travel queue
                 if (en_pac.x, en_pac.y) in self.travel_queue:
 
-                    if debug: p(f'Enemy on travel queue')
+                    if self.debug: p(f'Enemy on travel queue')
 
                     # If at terminal node
                     if not on_edge and not on_joint_node:
 
-                        if debug: p(f'at terminal node')
+                        if self.debug: p(f'Self at terminal node')
 
                         # If you can change to stronger type, change
                         if self.ability_cooldown == 0:
 
-                            if debug: p(f'Changing to stronger type')
+                            if self.debug: p(f'Changing to stronger type')
 
                             return self._switch(self.stronger_type[en_pac.type_id])
 
                         # You are trapped and can do nothing. Wait for your doom.
                         else:
 
-                            if debug: p('Gonna die')
+                            if self.debug: p('Gonna die')
 
                             return self.stay()
 
                     # If not at terminal node, reverse
                     else:
 
-                        if debug: p('Not at terminal node, reversing')
+                        if self.debug: p('Not at terminal node, reversing travel queue')
 
                         self.reverse_travel_queue()
                         return self.follow_travel_queue()
@@ -435,7 +443,7 @@ class Pac:
                 # else if enemy pac not on travel queue, reverse and follow travel queue
                 else:
 
-                    if debug: p('Enemy not on travel queue, reversing')
+                    if self.debug: p('Enemy not on travel queue, reversing')
 
                     self.reverse_travel_queue()
                     return self.follow_travel_queue()
@@ -443,12 +451,12 @@ class Pac:
             # If on edge
             elif on_edge:
 
-                if debug: p('On edge')
+                if self.debug: p('Self on edge')
 
                 # If enemy pac on travel queue, reverse
                 if (en_pac.x, en_pac.y) in self.travel_queue:
 
-                    if debug: p(f'Enemy on travel queue, reversing')
+                    if self.debug: p(f'Enemy on travel queue, reversing')
 
                     self.reverse_travel_queue()
                     return self.follow_travel_queue()
@@ -456,15 +464,15 @@ class Pac:
                 # else if enemy pac not on travel queue, follow travel queue
                 else:
 
-                    if debug: p('Enemy not on travel queue, continuing')
+                    if self.debug: p('Enemy not on travel queue, continuing')
 
                     return self.follow_travel_queue()
 
             elif on_joint_node:
-                if debug: p('On joint node, getting new edge greedily')
+                if self.debug: p('On joint node, getting new edge greedily from inside play func')
                 # TODO: Handle in optimization, should not need to construct this case here
                 new_queue = self.con.simple_greedy_edge(self)
-                if debug: p(f'New queue: {new_queue}')
+                if self.debug: p(f'New queue: {new_queue}')
                 self.set_travel_queue(new_queue)
                 return self.follow_travel_queue()
 
@@ -474,7 +482,7 @@ class Pac:
 
         # If enemy is weaker
         else:
-            if debug: p('Enemy weaker')
+            if self.debug: p('Enemy weaker')
 
             # If enemy on edge
             if (en_pac.x, en_pac.y) not in self.maze.nodes:
@@ -485,43 +493,45 @@ class Pac:
 
                 n1, n2 = current_edge.node1, current_edge.node2
 
-                if debug: p('Enemy on edge')
+                if self.debug: p('Enemy on edge')
 
                 # If enemy on terminal edge
                 if 'terminal' in [n1.type, n2.type]:
 
-                    if debug: p('Enemy on terminal edge')
+                    if self.debug: p('Enemy on terminal edge')
 
                     terminal_node = n1 if n1.type == 'terminal' else n2
 
                     # If enemy closer to terminal node, chase and kill
                     if self.distance(terminal_node.x, terminal_node.y) > en_pac.distance(terminal_node.x, terminal_node.y):
 
-                        if debug: p('Enemy trapped')
+                        if self.debug: p('Enemy trapped')
 
                         self.set_travel_queue(current_edge.path if n2.type == 'terminal' else list(reversed(current_edge.path)))
                         self.accepting_commands = False
+
+                        if self.debug: p(f'Kill travel queue: {self.travel_queue}')
                         return self.follow_travel_queue()
 
                     # If enemy not closer to terminal node
                     else:
 
-                        if debug: p('Enemy not closer to terminal node, continuing')
+                        if self.debug: p('Enemy not closer to terminal node, continuing')
                         return self.follow_travel_queue()
 
                 # If enemy not on terminal edge
                 else:
 
-                    if debug: p('Enemy not on terminal edge, continuing')
+                    if self.debug: p('Enemy not on terminal edge, continuing')
                     return self.follow_travel_queue()
 
             # If enemy on node
             else:
 
-                if debug: p('Enemy on a node, continuining')
+                if self.debug: p('Enemy on a node, continuining')
                 return self.follow_travel_queue()
 
-    def play(self, debug=False):
+    def play(self):
         """ Follows a mostly defensive strategy returning the next command """
 
         en_pac_close = dict()
@@ -536,29 +546,32 @@ class Pac:
         diag_cells = self.maze.get_diagonal_cells(self.x, self.y)
         my_pacs_on_diags = [pac for _, pac in self.my_pacs.items() if (pac.x, pac.y) in diag_cells]
 
-        # if debug: p(f'Pac({pac.x}, {pac.y}) | en_pac_close: {len(en_pac_close)} | my_pacs_on_diags: {len(my_pacs_on_diags)}')
+        if self.debug: p(f'Pac({pac.x}, {pac.y}) | en_pac_close: {len(en_pac_close)} | my_pacs_on_diags: {len(my_pacs_on_diags)}')
 
         # Enemy pac 1 or 2 distance away
         if en_pac_close:
 
-            if debug: p(f'Enemy pac close')
+            if self.debug: p(f'Enemy pac close')
 
             if min(en_pac_close.values()) == 2:
                 if self.ability_cooldown == 0:
+                    if self.debug: p('Enemy close but still 2 distance away, using speed')
                     return self._speed()
                 else:
 
-                    if debug: p(f'en_pac_close so enemy routine')
-                    return self.enemy_routine(en_pac_close, debug)
+                    if self.debug: p(f'Enemy close, following enemy routine')
+                    return self.enemy_routine(en_pac_close)
             else:
-                return self.enemy_routine(en_pac_close, debug)
+                if self.debug: p('Enemy only 1 distance away, following enemy routine')
+                return self.enemy_routine(en_pac_close)
 
         # Friendly pac on diagonal cell
         elif my_pacs_on_diags:
 
-            if debug: p(f'My pacs on diags')
+            if self.debug: p(f'My pacs on diags')
 
             if self.ability_cooldown == 0:
+                if self.debug: p(f'Pac on diag, but using speed first')
                 return self._speed()
             else:
                 next_cells_diag_pacs = [pac.get_next_cell() for pac in my_pacs_on_diags]
@@ -566,39 +579,40 @@ class Pac:
                 # If collision about to happen
                 if self.get_next_cell() in next_cells_diag_pacs:
 
-                    if debug: p('Going to collide with my pacs')
+                    if self.debug: p('Can collide')
 
                     # If self id greater than all diag pacs, take right of way
                     if self.id > max([pac.id for pac in my_pacs_on_diags]):
 
-                        if debug: p(f'Taking right of way')
+                        if self.debug: p(f'Taking right of way')
 
                         return self.follow_travel_queue()
 
                     # Otherwise let higher id pac pass and you stay
                     else:
 
-                        if debug: p(f'Staying to let other pac pass')
+                        if self.debug: p(f'Staying to let other pac pass')
 
                         return self.stay()
 
                 # If collision is not happening according to all pac travel queues
                 else:
 
-                    if debug: p(f'Not colliding so moving on')
+                    if self.debug: p(f'Not colliding, follow travel queue')
 
                     return self.follow_travel_queue()
 
         # Normal operation, no pacs in vicinity
         else:
 
-            if debug: p(f'Normal scenes')
+            if self.debug: p(f'Normal operation')
 
             if self.ability_cooldown == 0:
+                if self.debug: p('Normal operation and using speed')
                 return self._speed()
             else:
 
-                if debug: p(f'Following normal travel queue')
+                if self.debug: p(f'Normal operation, following travel queue')
 
                 return self.follow_travel_queue()
 
@@ -668,7 +682,7 @@ class Controller:
 
             if pac.travel_queue:
                 if debug: p('Pac has travel queue, moving on it')
-                return pac.follow_travel_queue()
+                return pac.travel_queue
             else:
                 if debug: p('Pac not on node and no travel queue; moving to closest node')
                 return self.move_to_closest_joint_node(pac)
@@ -701,10 +715,10 @@ class Controller:
         return travel_queue
 
 
-def update(turn_id, my_pacs, en_pacs, maze, con):
+def update(turn_id, my_pacs, maze, con):
 
-    def pac_update(visible_pac_count, my_pacs, en_pacs, maze, con):
-        my_pacs, en_pacs = dict(), dict()
+    def pac_update(visible_pac_count, my_pacs, maze, con):
+        en_pacs = dict()
 
         for i in range(visible_pac_count):
             pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
@@ -738,7 +752,7 @@ def update(turn_id, my_pacs, en_pacs, maze, con):
         return my_pacs, en_pacs
 
     visible_pac_count = int(input())
-    my_pacs, en_pacs = pac_update(visible_pac_count, my_pacs, en_pacs, maze, con)  # all your pacs and enemy pacs in sight
+    my_pacs, en_pacs = pac_update(visible_pac_count, my_pacs, maze, con)  # all your pacs and enemy pacs in sight
 
     visible_pellet_count = int(input())
     visible_pellet_dict = dict()
@@ -765,32 +779,18 @@ if __name__ == '__main__':
 
     # game loop
     turn_id = 0
-    joint_nodes = [cell for cell, node in maze.nodes.items() if node.type == 'joint']
     while True:
         # Update score
         my_score, opponent_score = [int(i) for i in input().split()]
 
         # Update all game stats
-        my_pacs, en_pacs = update(turn_id, my_pacs, en_pacs, maze, con)  # Updates state for this turn and updates pellet map in `maze`
+        my_pacs, en_pacs = update(turn_id, my_pacs, maze, con)
 
-        # Calculate and set travel queues for each Pac
+        # Let Pacs decide next move
         for pac_id, pac in my_pacs.items():
-            if turn_id == 0 or (pac.x, pac.y) in joint_nodes:
-                if pac_id == 1:
-                    travel_queue = con.simple_greedy_edge(pac, debug=True)
-                else:
-                    travel_queue = con.simple_greedy_edge(pac, debug=False)
-
-                p(f'Setting travel queue for Pac {pac_id}')
-                pac.set_travel_queue(travel_queue)
-                p(f'Queue: {pac.travel_queue}')
-
-        # Let Pacs decide on next move
-        for pac_id, pac in my_pacs.items():
-            if pac_id == 1:
-                c.add_command(pac.play(debug=True))
-            else:
-                c.add_command(pac.play())
+            if pac_id == 2:
+                pac.debug = True
+            c.add_command(pac.play())
 
         p(c.command_queue)
         # Publish all commands
