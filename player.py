@@ -8,36 +8,8 @@ def p(*args, **kwargs):
     return print(*args, **kwargs, file=sys.stderr)
 
 
-class Map:
-    def __init__(self, w, h):
-        self.w = w
-        self.h = h
-        self.rows = list()
-        self.floor_plan = dict()
-
-    def read_map(self):
-        # Read in the inputs and store it line-by-line
-        for i in range(self.h):
-            self.rows.append(input())
-
-    def parse(self):
-        for y in range(self.h):
-            for x in range(self.w):
-                self.floor_plan[(x, y)] = self.rows[y][x]
-
-    def __str__(self):
-        s = ''
-        for r in self.rows:
-            s += r + '\n'
-        return s.strip('\n')
-
-
-class Game:
+class Commander:
     def __init__(self):
-        self.my_score = 0
-        self.opponent_score = 0
-        self.visible_pac_count = 0
-        self.visible_pellet_count = 0
         self.command_queue = list()
 
     def add_command(self, command):
@@ -83,10 +55,9 @@ class Edge:
 
 
 class Maze:
-    def __init__(self, w, h, floor_plan):
-        self.w = w
-        self.h = h
-        self.floor_plan = floor_plan
+    def __init__(self,):
+        self.w, self.h = [int(i) for i in input().split()]
+        self.floor_plan = self.parse_map()
         self.dirs = ['l', 'd', 'r', 'u']
         self.node_count = 0
         self.edge_count = 0
@@ -94,7 +65,19 @@ class Maze:
         self.edges = dict()  # edge_id -> Edge()
         self.pellet_dict = dict()  # (x, y) -> pellet value
         self.total_pellets = 0
-        self.pac_locations = list()
+
+    def parse_map(self):
+        # Read in the inputs and store it line-by-line
+        rows = list()
+        for i in range(self.h):
+            rows.append(input())
+
+        floor_plan = dict()
+        for y in range(self.h):
+            for x in range(self.w):
+                floor_plan[(x, y)] = rows[y][x]
+
+        return floor_plan
 
     @staticmethod
     def inverse_dir(dir):
@@ -164,16 +147,10 @@ class Maze:
                     if self.conn_count(x, y) == 1:
                         # Create terminal node
                         self.nodes[(x, y)] = Node(self.node_count, x, y, 'terminal')
-
-                        # p(f"Constructing node at ({x}, {y})")
-
                         self.node_count += 1
                     elif self.conn_count(x, y) > 2:
                         # Create joint node
                         self.nodes[(x, y)] = Node(self.node_count, x, y, 'joint')
-
-                        # p(f"Constructing node at ({x}, {y})")
-
                         self.node_count += 1
 
     def _create_edge(self, node, dir):
@@ -254,70 +231,93 @@ class Maze:
                     pass
             e.pellets = pellets
 
-    def update_pac_locations(self, my_pacs, en_pacs):
-        my_pac_locations = [(pac.x, pac.y) for id, pac in my_pacs.items()]
-        en_pac_locations = [(pac.x, pac.y) for id, pac in en_pacs.items()]
-        self.pac_locations = my_pac_locations + en_pac_locations
+    def get_visible_cells(self, x, y):
+        # Get visible cells from (x, y) in maze
+        visible_cells = list()
+        visible_cells.append((x, y))
+
+        for dir in self.get_available_dirs(x, y):
+            x0, y0 = x, y
+            while self.check_way(x0, y0, dir):
+                x0, y0 = self.get_coord(x0, y0, dir)
+                visible_cells.append((x0, y0))
+        return visible_cells
+
+    def update_pellet_map(self, turn_id, visible_pellet_dict, my_pacs):
+
+        if turn_id == 0:
+            # Assume all floor cells have pellets
+            pellet_dict = {cell: 1 for cell, value in self.floor_plan.items() if value == ' '}  # Cell is (x, y) tuple
+
+            # Update superpellets from `visible_pellet_dict`
+            super_pellets = {cell: value for cell, value in visible_pellet_dict.items() if value > 1}
+            pellet_dict.update(super_pellets)
+            self.pellet_dict = pellet_dict
+
+        else:
+            # Get set of all cells visible to all pacs and subtract the cells in which you saw a pellet
+            # Resulting set of points don't have any pellets. Update these points in the pellet map
+
+            all_visible_cells = set()
+            for _, pac in my_pacs.items():
+                all_visible_cells = all_visible_cells.union(set(maze.get_visible_cells(pac.x, pac.y)))
+
+            visible_pellet_cells = set([cell for cell, value in visible_pellet_dict.items()])
+
+            no_pellet_cells = all_visible_cells - visible_pellet_cells
+            no_pellet_dict = {cell: 0 for cell in no_pellet_cells}
+
+            curr_pellet_dict = self.pellet_dict
+            curr_pellet_dict.update(no_pellet_dict)
+            self.pellet_dict = curr_pellet_dict
 
 
 class Pac:
-    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze):
+    def __init__(self, id, x, y, type_id, speed_turns_left, ability_cooldown):
         self.id = id
         self.x = x
         self.y = y
         self.type_id = type_id
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
-        self.game = game
-        self.maze = maze
+        self.my_pacs = None
+        self.en_pacs = None
+
         self.current_dest = None
         self.travel_queue = list()
         self.decision_recursion_limit = 3
         self.decision_counter = 0
+        self.stronger_type = {'ROCK': 'PAPER', 'PAPER': 'SCISSORS', 'SCISSORS': 'ROCK'}
+        self.accepting_commands = True  # This is false when Pac is on kill mode in a terminal edge
 
-    def move(self, x, y):
-        self.game.command_queue.append(f'MOVE {self.id} {x} {y}')
+    def _move(self, x, y):
+        return f'MOVE {self.id} {x} {y}'
+
+    def _speed(self):
+        return f'SPEED {self.id}'
+
+    def _switch(self, type):
+        return f'SWITCH {self.id} {type.upper()}'
 
     def stay(self):
-        self.move(self.x, self.y)
+        self._move(self.x, self.y)
 
-    def move_on_travel_queue(self):
-        self.decision_counter += 1
-        if self.decision_counter == self.decision_recursion_limit:
-            self.decision_counter = 0
-            self.stay()  # So that pac does not get stuck in infinite loop while having pacs on both of its sides
-            return
+    def follow_travel_queue(self):
 
         if not self.travel_queue:
             self.stay()
         else:
-            try:
-                current_index = self.travel_queue.index((self.x, self.y))
-            except ValueError:
-                # This means travel queue starts from the point just next to current node, hence current index -1
-                current_index = -1
+            current_index = self.travel_queue.index((self.x, self.y))
 
             # If already at destination, stay and reset travel queue
             if current_index == len(self.travel_queue) - 1:
                 self.travel_queue = []
                 self.stay()
-                self.decision_counter = 0
+
+            # Otherwise continue on travel queue
             else:
-                # If next cell or next-to-next cell contain a pac, reverse direction
                 next_cell = self.travel_queue[current_index + 1]
-                try:
-                    next_to_next_cell = self.travel_queue[current_index + 2]
-                except IndexError:
-                    next_to_next_cell = next_cell
-
-                if (next_cell in self.maze.pac_locations) or (next_to_next_cell in self.maze.pac_locations):
-                    self.travel_queue = list(reversed(self.travel_queue))  # Reverse path
-                    self.move_on_travel_queue()
-
-                # Otherwise proceed to next cell
-                else:
-                    self.move(*next_cell)
-                    self.decision_counter = 0
+                self._move(*next_cell)
 
 
 class Controller:
@@ -355,7 +355,7 @@ class Controller:
                     break
         p(f'Pac({pac.x}, {pac.y}) travel queue: {travel_queue}')
         pac.travel_queue = travel_queue
-        pac.move_on_travel_queue()
+        pac.follow_travel_queue()
 
     def greedy_edge_traverse(self, pac, maze):
 
@@ -377,7 +377,7 @@ class Controller:
 
                 p(f'Pac continues on travel queue')
 
-                pac.move_on_travel_queue()
+                pac.follow_travel_queue()
         else:
 
             # Calculate edge with highest pellet rate for the current node
@@ -406,105 +406,76 @@ class Controller:
             p(f'New travel queue: {travel_queue}')
 
             pac.travel_queue = travel_queue
-            pac.move_on_travel_queue()
+            pac.follow_travel_queue()
 
 
-def game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game, maze):
+def pac_update(visible_pac_count):
+    my_pacs, en_pacs = dict(), dict()
 
     for i in range(visible_pac_count):
         pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
-        pac_id, mine, x, y = map(int, (pac_id, mine, x, y))
+        pac_id, mine, x, y, speed_turns_left, ability_cooldown = \
+            map(int, (pac_id, mine, x, y, speed_turns_left, ability_cooldown))
+
         mine = mine == 1
         if mine:
             # My pac
-            if pac_id not in my_pacs:
-                my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze)
-            else:
-                # Pac in my pacs
-                this_pac = my_pacs[pac_id]
-                this_pac.x = x
-                this_pac.y = y
-                this_pac.speed_turns_left = speed_turns_left
-                this_pac.ability_cooldown = ability_cooldown
+            my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
         else:
             # Enemy pac
-            if pac_id not in en_pacs:
-                en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, game, maze)
-            else:
-                # Pac in enemy pacs
-                this_pac = en_pacs[pac_id]
-                this_pac.x = x
-                this_pac.y = y
-                this_pac.speed_turns_left = speed_turns_left
-                this_pac.ability_cooldown = ability_cooldown
+            en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown)
 
-    # Store pac locations in maze object (which will help pac avoid collisions by making it pac aware)
-    maze.update_pac_locations(my_pacs, en_pacs)
+    # Store all pac data inside each of my pac (Woah! A pac will have itself in an attribute)
+    for _, my_pac in my_pacs.items():
+        my_pac.my_pacs = my_pacs
+        my_pac.en_pacs = en_pacs
 
     return my_pacs, en_pacs
 
 
-def game_loop_pellet_update(visible_pellet_count):
-    pellet_dict = dict()
+def update(turn_id, maze):
+    visible_pac_count = int(input())
+    my_pacs, en_pacs = pac_update(visible_pac_count)  # all your pacs and enemy pacs in sight
+
+    visible_pellet_count = int(input())
+    visible_pellet_dict = dict()
+
     for i in range(visible_pellet_count):
         x, y, value = [int(j) for j in input().split()]
-        pellet_dict[(x, y)] = value
-    return pellet_dict
+        visible_pellet_dict[(x, y)] = value
 
+    maze.update_pellet_map(turn_id, visible_pellet_dict, my_pacs)
 
-def game_loop_update(turn_id, game, maze, my_pacs, en_pacs):
-    my_score, opponent_score = [int(i) for i in input().split()]
-    visible_pac_count = int(input())  # all your pacs and enemy pacs in sight
-
-    game.my_score = my_score
-    game.opponent_score = opponent_score
-    game.visible_pac_count = visible_pac_count
-
-    my_pacs, en_pacs = game_loop_pac_update(visible_pac_count, my_pacs, en_pacs, game, maze)
-
-    visible_pellet_count = int(input())  # all pellets in sight
-    game.visible_pellet_count = visible_pellet_count
-
-    pellet_dict = game_loop_pellet_update(visible_pellet_count)
-    if turn_id == 0:
-        maze.pellet_dict = pellet_dict
-    else:
-        orig_pellet_dict = maze.pellet_dict
-        missing_points = list(set(orig_pellet_dict.keys()) - set(pellet_dict.keys()))
-        for point in missing_points:
-            orig_pellet_dict[point] = 0
-        maze.pellet_dict = orig_pellet_dict
-
-    return game, maze, my_pacs, en_pacs
+    return my_pacs, en_pacs
 
 
 if __name__ == '__main__':
-    width, height = [int(i) for i in input().split()]
-    m = Map(width, height)
-    m.read_map()
-    m.parse()
-    maze = Maze(width, height, m.floor_plan)
+    maze = Maze()
     maze.construct_nodes()
     maze.construct_edges()
 
-    game = Game()
-    con = Controller()
-    my_pacs = dict()
-    en_pacs = dict()
+    c = Commander()  # For tracking and publishing final commands to stdout
+    con = Controller()  # Game strategy maker
 
-    initial_pellets = 0
     # game loop
     turn_id = 0
     while True:
-        t0 = time.time()
+        # Update score
+        my_score, opponent_score = [int(i) for i in input().split()]
+
         # Update all game stats
-        game, maze, my_pacs, en_pacs = game_loop_update(turn_id, game, maze, my_pacs, en_pacs)
-        maze.update_pellet_values()
+        my_pacs, en_pacs = update(turn_id, maze)  # Updates state for this turn and updates pellet map in `maze`
 
-        # TODO: Implement multi-edge greedy traverse
 
-        for pac_id, pac in my_pacs.items():
-            con.greedy_edge_traverse(pac, maze)
+        # maze.update_pellet_values()
+        #
+        # for pac_id, pac in my_pacs.items():
+        #     con.greedy_edge_traverse(pac, maze)
+        #
+        # c.publish()
 
-        game.publish()
+
+        print('MOVE 0 17 5')
+
+
         turn_id += 1
