@@ -286,6 +286,8 @@ class Pac:
         self.id = id
         self.x = x
         self.y = y
+        self.last_x = None
+        self.last_y = None
         self.type_id = type_id
         self.speed_turns_left = speed_turns_left
         self.ability_cooldown = ability_cooldown
@@ -294,6 +296,7 @@ class Pac:
         self.my_pacs = None
         self.en_pacs = None
         self.debug = False
+        self.stuck_counter = 0  # If stays at same location for 3 moves, reverse travel direction
         self.travel_queue = list()
         self.stronger_type = {'ROCK': 'PAPER', 'PAPER': 'SCISSORS', 'SCISSORS': 'ROCK'}
         self.accepting_commands = True  # This is turned False when Pac is on kill mode in a terminal edge
@@ -373,6 +376,17 @@ class Pac:
         """ If self in mid of current travel queue, follow it
         Otherwise, request a new travel queue from controller
         """
+        if (self.last_x, self.last_y) == (self.x, self.y):
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 0
+            self.last_x = self.x
+            self.last_y = self.y
+
+        if self.stuck_counter > 2:
+            self.reverse_travel_queue()
+            return self._move(*self.get_next_cell())
+
 
         if not self.travel_queue:
             # Request for new travel queue from controller
@@ -859,3 +873,6 @@ if __name__ == '__main__':
 
         # Increment turn counter
         turn_id += 1
+
+    # TODO: Fix friendly collisions from pacs 2 distance away
+    # TODO: Fix pac stuck in terminal edge when in speed mode
