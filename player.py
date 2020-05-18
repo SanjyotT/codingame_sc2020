@@ -2,6 +2,7 @@ import sys
 import time
 import math
 import random
+import copy
 
 
 def p(*args, **kwargs):
@@ -313,6 +314,7 @@ class Pac:
         return abs(self.x - x) + abs(self.y - y)
 
     def get_next_cell(self):
+
         if not self.travel_queue:
             new_queue = self.con.simple_greedy_edge(self)
             self.set_travel_queue(new_queue)
@@ -320,14 +322,41 @@ class Pac:
 
         current_index = self.travel_queue.index((self.x, self.y))
 
-        # If already at destination, stay at same location (also become receptive to commands)
-        if current_index == len(self.travel_queue) - 1:
-            self.accepting_commands = True
-            self.set_travel_queue([])
-            return self.x, self.y
+        if self.debug: p(f'Fetching next cell, current index: {current_index} in {self.travel_queue}')
 
-        # Move forward
+        # When using speed
+        if self.speed_turns_left > 0:
+
+            if self.debug: p('Speed is on so moving two cells')
+            # If less than 2 distance away from final node in travel_queue, append remaining cells and a new queue
+            if current_index >= len(self.travel_queue) - 2:
+                if self.debug: p(f'Current index is length of queue - 1 or -2')
+
+                this_queue = self.travel_queue
+                this_queue_final_node_cell = this_queue[-1]
+
+                pac_copy = copy.deepcopy(self)
+                pac_copy.x, pac_copy.y = this_queue_final_node_cell
+                new_queue = self.con.simple_greedy_edge(pac_copy)
+                final_queue = this_queue + new_queue if this_queue[-1] != new_queue[0] else this_queue + new_queue[1:]
+
+                if self.debug: p(f'this_queue: {this_queue} | new_queue: {new_queue} | final: {final_queue}')
+                self.set_travel_queue(final_queue)
+                current_index = self.travel_queue.index((self.x, self.y))
+
+            # Move to two cell forward
+            return self.travel_queue[current_index + 2]
+
+        # When not using speed
         else:
+            if self.debug: p('Speed is off so moving one cell')
+            # If already at destination, stay at same location (also become receptive to commands)
+            if current_index == len(self.travel_queue) - 1:
+                self.accepting_commands = True
+                self.set_travel_queue(self.con.simple_greedy_edge(self))
+                return self.get_next_cell()
+
+            # Move forward
             return self.travel_queue[current_index + 1]
 
     def set_travel_queue(self, queue):
@@ -534,36 +563,47 @@ class Pac:
     def play(self):
         """ Follows a mostly defensive strategy returning the next command """
 
-        en_pac_close = dict()
-
+        en_cell_dict = {}
         if self.en_pacs:
-            en_pac_close = {
-                pac: self.distance(pac.x, pac.y)
-                for _, pac in self.en_pacs.items()
-                if self.distance(pac.x, pac.y) <= 2
-            }  # Get enemy Pacs and their distances from self if they are close
+            en_pac_locs = [(pac.x, pac.y) for _, pac in self.en_pacs.items()]
+            # Get 2 distance squares in each available dir
+            dist = 0
+            en_cell_dict = {}
+            l, r, u, d = (self.x, self.y), (self.x, self.y), (self.x, self.y), (self.x, self.y)
+            while dist < 2:
+                dist += 1
+                l = self.maze.get_coord(*l, 'l')
+                r = self.maze.get_coord(*r, 'r')
+                u = self.maze.get_coord(*u, 'u')
+                d = self.maze.get_coord(*d, 'd')
+
+                for cell in [l, r, u, d]:
+                    if cell in en_pac_locs:
+                        # Get enemy pac in the cell
+                        en_pac = [pac for _, pac in self.en_pacs.items() if (pac.x, pac.y) == cell][0]
+                        en_cell_dict[en_pac] = dist
 
         diag_cells = self.maze.get_diagonal_cells(self.x, self.y)
         my_pacs_on_diags = [pac for _, pac in self.my_pacs.items() if (pac.x, pac.y) in diag_cells]
 
-        if self.debug: p(f'Pac({pac.x}, {pac.y}) | en_pac_close: {len(en_pac_close)} | my_pacs_on_diags: {len(my_pacs_on_diags)}')
+        if self.debug: p(f'Pac({self.x}, {self.y}) | en_cell_dict: {len(en_cell_dict)} | my_pacs_on_diags: {len(my_pacs_on_diags)}')
 
         # Enemy pac 1 or 2 distance away
-        if en_pac_close:
+        if en_cell_dict:
 
             if self.debug: p(f'Enemy pac close')
 
-            if min(en_pac_close.values()) == 2:
+            if min(en_cell_dict.values()) == 2:
                 if self.ability_cooldown == 0:
                     if self.debug: p('Enemy close but still 2 distance away, using speed')
                     return self._speed()
                 else:
 
                     if self.debug: p(f'Enemy close, following enemy routine')
-                    return self.enemy_routine(en_pac_close)
+                    return self.enemy_routine(en_cell_dict)
             else:
                 if self.debug: p('Enemy only 1 distance away, following enemy routine')
-                return self.enemy_routine(en_pac_close)
+                return self.enemy_routine(en_cell_dict)
 
         # Friendly pac on diagonal cell
         elif my_pacs_on_diags:
@@ -622,14 +662,14 @@ class Controller:
     def __init__(self):
         pass
 
-    def simple_greedy_edge(self, pac, debug=False):
+    def simple_greedy_edge(self, pac):
         # If pac at a joint node, assign a travel queue for the best edge visible
         joint_nodes = [cell for cell, node in pac.maze.nodes.items() if node.type == 'joint']
 
         # If at joint node, choose the edge which seems the best based on pellet count
         if (pac.x, pac.y) in joint_nodes:
 
-            if debug: p('Pac at joint node')
+            if pac.debug: p('Pac at joint node')
 
             node = pac.maze.nodes[(pac.x, pac.y)]
             connected_edges = [node[d] for d in pac.maze.dirs if node[d] is not None]
@@ -646,12 +686,12 @@ class Controller:
 
             if best_edge.node1 == node:
 
-                if debug: p(f'Best path ({best_edge.node1.x}, {best_edge.node1.y}) -> ({best_edge.node2.x}, {best_edge.node2.y})')
+                if pac.debug: p(f'Best path ({best_edge.node1.x}, {best_edge.node1.y}) -> ({best_edge.node2.x}, {best_edge.node2.y})')
 
                 return best_edge.path
             else:
 
-                if debug: p(
+                if pac.debug: p(
                     f'Best path ({best_edge.node2.x}, {best_edge.node2.y}) -> ({best_edge.node1.x}, {best_edge.node1.y})')
 
                 return list(reversed(best_edge.path))
@@ -659,32 +699,32 @@ class Controller:
         # else if in terminal nodes, reverse current travel queue
         elif (pac.x, pac.y) in pac.maze.nodes:
 
-            if debug: p('Pac at terminal node')
+            if pac.debug: p('Pac at terminal node')
 
             # If there exists a travel queue, reverse
             if pac.travel_queue:
 
-                if debug: p('Reversing travel queue')
+                if pac.debug: p('Reversing travel queue')
 
                 return list(reversed(pac.travel_queue))
 
             # Else move to closest joint node
             else:
 
-                if debug: p('moving to closest joint node since I am at terminal node')
+                if pac.debug: p('moving to closest joint node since I am at terminal node')
 
                 return self.move_to_closest_joint_node(pac)
 
         # If not on any node
         else:
 
-            if debug: p('Not on any node')
+            if pac.debug: p('Not on any node')
 
             if pac.travel_queue:
-                if debug: p('Pac has travel queue, moving on it')
+                if pac.debug: p('Pac has travel queue, moving on it')
                 return pac.travel_queue
             else:
-                if debug: p('Pac not on node and no travel queue; moving to closest node')
+                if pac.debug: p('Pac not on node and no travel queue; moving to closest node')
                 return self.move_to_closest_joint_node(pac)
 
     @staticmethod
@@ -694,22 +734,40 @@ class Controller:
         # Check which edge the `pac` is on
         for _, e in maze.edges.items():
             if pac_loc in e.path:
+                # Move to the edge side with higher points
+                index_on_edge = e.path.index(pac_loc)
+                cells_to_right = e.path[index_on_edge + 1:]  ### Remove +1 if index errors
+                cells_to_left = e.path[:index_on_edge]
 
-                if e.node1.type == 'terminal':
-                    # If one node is terminal, move towards other (which will be joint)
+                pellets_to_right = 0
+                pellets_to_left = 0
+
+                for cell in cells_to_right:
+                    pellets_to_right += pac.maze.pellet_dict[cell]
+                for cell in cells_to_left:
+                    pellets_to_left += pac.maze.pellet_dict[cell]
+
+                if pellets_to_right > pellets_to_left:
                     travel_queue = e.path
-
-                elif e.node2.type == 'terminal':
-                    # If one node is terminal, move towards other (which will be joint)
-                    travel_queue = list(reversed(e.path))
-
-                elif e.path.index(pac_loc) < math.floor(len(e.path) / 2.0):
-                    # Closest node is on the half side of the edge the pac is in
-                    travel_queue = list(reversed(e.path))
-
                 else:
-                    # Closest node is on the half side of the edge the pac is in
-                    travel_queue = e.path
+                    travel_queue = list(reversed(e.path))
+
+                #
+                # if e.node1.type == 'terminal':
+                #     # If one node is terminal, move towards other (which will be joint)
+                #     travel_queue = e.path
+                #
+                # elif e.node2.type == 'terminal':
+                #     # If one node is terminal, move towards other (which will be joint)
+                #     travel_queue = list(reversed(e.path))
+                #
+                # elif e.path.index(pac_loc) < math.floor(len(e.path) / 2.0):
+                #     # Closest node is on the half side of the edge the pac is in
+                #     travel_queue = list(reversed(e.path))
+                #
+                # else:
+                #     # Closest node is on the half side of the edge the pac is in
+                #     travel_queue = e.path
                 break
 
         return travel_queue
@@ -788,7 +846,7 @@ if __name__ == '__main__':
 
         # Let Pacs decide next move
         for pac_id, pac in my_pacs.items():
-            if pac_id == 2:
+            if pac_id == 1:
                 pac.debug = True
             c.add_command(pac.play())
 
