@@ -313,6 +313,9 @@ class Pac:
     def distance(self, x, y):
         return abs(self.x - x) + abs(self.y - y)
 
+    def get_current_index(self):
+        return len(self.travel_queue) - 1 - self.travel_queue[::-1].index((self.x, self.y))
+
     def get_next_cell(self):
 
         if not self.travel_queue:
@@ -320,7 +323,7 @@ class Pac:
             self.set_travel_queue(new_queue)
             if self.debug: p(f'Game start, no next cell to fetch, new queue: {new_queue}')
 
-        current_index = self.travel_queue.index((self.x, self.y))
+        current_index = self.get_current_index()
 
         if self.debug: p(f'Fetching next cell, current index: {current_index} in {self.travel_queue}')
 
@@ -342,7 +345,7 @@ class Pac:
 
                 if self.debug: p(f'this_queue: {this_queue} | new_queue: {new_queue} | final: {final_queue}')
                 self.set_travel_queue(final_queue)
-                current_index = self.travel_queue.index((self.x, self.y))
+                current_index = self.get_current_index()
 
             # Move to two cell forward
             return self.travel_queue[current_index + 2]
