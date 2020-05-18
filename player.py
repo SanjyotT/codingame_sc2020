@@ -297,9 +297,10 @@ class Pac:
         self.en_pacs = None
         self.debug = False
         self.stuck_counter = 0  # If stays at same location for 3 moves, reverse travel direction
+        self.recursion_counter = 0
         self.travel_queue = list()
         self.stronger_type = {'ROCK': 'PAPER', 'PAPER': 'SCISSORS', 'SCISSORS': 'ROCK'}
-        self.accepting_commands = True  # This is turned False when Pac is on kill mode in a terminal edge
+        self.accepting_commands = True
 
     def _move(self, x, y):
         return f'MOVE {self.id} {x} {y}'
@@ -321,6 +322,74 @@ class Pac:
 
     def get_next_cell(self):
 
+        if self.accepting_commands and self.recursion_counter >= 4:
+            p(f'Pac({self.id}) hit recursion in get_next_cell')
+            self.accepting_commands = False
+            return self.get_next_cell()
+
+        if self.accepting_commands and not self.travel_queue:
+            new_queue = self.con.strategy(self)
+            self.set_travel_queue(new_queue)
+            if self.debug: p(f'No travel queue, new queue: {new_queue}')
+            self.recursion_counter += 1
+            return self.get_next_cell()
+
+        current_index = self.get_current_index()
+
+        if not self.accepting_commands and current_index != len(self.travel_queue) - 1:
+            if self.debug: p('Previously hit recursion, travelling one step towards travel queue')
+            return self.travel_queue[current_index + 1]
+
+        if self.accepting_commands and current_index == len(self.travel_queue) - 2:  # At second last element
+            if self.debug: p('At second last element in travel queue')
+
+            if self.speed_turns_left > 0:
+
+                this_queue = self.travel_queue
+                this_queue_final_node_cell = this_queue[-1]
+                pac_copy = copy.deepcopy(self)
+                pac_copy.x, pac_copy.y = this_queue_final_node_cell
+                new_queue = self.con.strategy(pac_copy)
+                # final_queue = this_queue + new_queue if this_queue[-1] != new_queue[0] else this_queue + new_queue[1:]
+                final_queue = this_queue + new_queue
+                self.set_travel_queue(final_queue)
+                self.recursion_counter += 1
+                if self.debug: p(f'this_queue: {this_queue} | new_queue: {new_queue} | final: {final_queue}')
+                return self.get_next_cell()
+
+            # Speed is off
+            else:
+                if self.debug: p('At second last element and speed off, so one travel one step')
+                return self.travel_queue[current_index + 1]
+
+        if current_index == len(self.travel_queue) - 1:  # At last element
+
+            self.accepting_commands = True
+            new_queue = self.con.strategy(self)
+            self.set_travel_queue(new_queue)
+            self.recursion_counter = 0
+            self.recursion_counter += 1
+            if self.debug: p(f'At last element. New queue: {new_queue}')
+            return self.get_next_cell()
+
+        # Self not at last two cells of travel queue
+        else:
+            if self.debug: p('Not at last two elements of travel queue')
+            if self.speed_turns_left > 0:
+                self.recursion_counter = 0
+                self.accepting_commands = True
+                if self.debug: p('Speed on, jumping 2 cells')
+                return self.travel_queue[current_index + 2]
+
+            # Speed is off
+            else:
+                if self.debug: p('Speed off, jumping 1 cell')
+                self.recursion_counter = 0
+                self.accepting_commands = True
+                return self.travel_queue[current_index + 1]
+
+    def get_next_cell_old(self):
+
         if not self.travel_queue:
             new_queue = self.con.simple_greedy_edge(self)
             self.set_travel_queue(new_queue)
@@ -334,6 +403,11 @@ class Pac:
         if self.speed_turns_left > 0:
 
             if self.debug: p('Speed is on so moving two cells')
+
+            # If remaining travel queue is less or equal to two steps, move slowly
+            if len(self.travel_queue[current_index:]) <= 2:
+                return self.travel_queue[current_index + 1]
+
             # If less than 2 distance away from final node in travel_queue, append remaining cells and a new queue
             if current_index >= len(self.travel_queue) - 2:
                 if self.debug: p(f'Current index is length of queue - 1 or -2')
@@ -366,11 +440,21 @@ class Pac:
             return self.travel_queue[current_index + 1]
 
     def set_travel_queue(self, queue):
+        if len(self.travel_queue) > 30:
+            p(f'Pac({self.id}) travel queue too long')
+            p(f'{self.travel_queue}')
+            self.travel_queue = []
+            self.set_travel_queue(self.con.strategy(self))
+            return
+
         if self.accepting_commands:
             self.travel_queue = queue
+            return
+
+        return
 
     def reverse_travel_queue(self):
-        self.travel_queue = list(reversed(self.travel_queue))
+        self.set_travel_queue(list(reversed(self.travel_queue)))
 
     def follow_travel_queue(self):
         """ If self in mid of current travel queue, follow it
@@ -383,18 +467,8 @@ class Pac:
             self.last_x = self.x
             self.last_y = self.y
 
-        if self.stuck_counter > 2:
+        if self.stuck_counter > 0:
             self.reverse_travel_queue()
-            return self._move(*self.get_next_cell())
-
-
-        if not self.travel_queue:
-            # Request for new travel queue from controller
-
-            new_queue = self.con.simple_greedy_edge(self)
-            self.set_travel_queue(new_queue)
-
-            if self.debug: p(f'Travel queue empty; new queue: {new_queue}')
 
         return self._move(*self.get_next_cell())
 
@@ -442,7 +516,6 @@ class Pac:
 
         # At this point we have, `on_edge`, `on_terminal_edge`, `on_joint`, `current_edge`, `current_node`
         if self.debug: p(f'on_edge: {on_edge} on_terminal_edge: {on_terminal_edge} on_joint_node: {on_joint_node}')
-
 
         # If enemy is stronger
         if en_pac.type_id == self.stronger_type[self.type_id]:
@@ -525,6 +598,16 @@ class Pac:
             else:
                 p(f'Unknown scenario for Pac({self.x}, {self.y}) in enemy routine')
                 return self.stay()
+
+        # If enemy is same type
+        if en_pac.type_id == self.type_id:
+
+            # If enemy on travel queue
+            if (en_pac.x, en_pac.y) in self.travel_queue:
+                self.reverse_travel_queue()
+                return self.follow_travel_queue()
+            else:
+                return self.follow_travel_queue()
 
         # If enemy is weaker
         else:
@@ -679,6 +762,10 @@ class Controller:
     def __init__(self):
         pass
 
+    def strategy(self, pac):
+        """ Current strategy """
+        return self.simple_greedy_edge(pac)
+
     def simple_greedy_edge(self, pac):
         # If pac at a joint node, assign a travel queue for the best edge visible
         joint_nodes = [cell for cell, node in pac.maze.nodes.items() if node.type == 'joint']
@@ -795,6 +882,8 @@ def update(turn_id, my_pacs, maze, con):
     def pac_update(visible_pac_count, my_pacs, maze, con):
         en_pacs = dict()
 
+        alive = {id: False for id in my_pacs}
+
         for i in range(visible_pac_count):
             pac_id, mine, x, y, type_id, speed_turns_left, ability_cooldown = input().split()
             pac_id, mine, x, y, speed_turns_left, ability_cooldown = \
@@ -802,6 +891,7 @@ def update(turn_id, my_pacs, maze, con):
 
             mine = mine == 1
             if mine:
+                alive[pac_id] = True
                 if pac_id not in my_pacs:
                     # My pac
                     my_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, maze, con)
@@ -818,6 +908,12 @@ def update(turn_id, my_pacs, maze, con):
             else:
                 # Enemy pac
                 en_pacs[pac_id] = Pac(pac_id, x, y, type_id, speed_turns_left, ability_cooldown, maze, con)
+
+        # If did not receive update for a pac, delete it from my_pacs
+        dead_pacs = [pac_id for pac_id, value in alive.items() if value == False]
+
+        for pac_id in dead_pacs:
+            del my_pacs[pac_id]
 
         # Store all pac data inside each of my pac (Woah! A pac will have itself in an attribute)
         for _, my_pac in my_pacs.items():
@@ -863,9 +959,13 @@ if __name__ == '__main__':
 
         # Let Pacs decide next move
         for pac_id, pac in my_pacs.items():
-            if pac_id == 1:
+            if pac_id == 2:
                 pac.debug = True
-            c.add_command(pac.play())
+            try:
+                c.add_command(pac.play())
+            except Exception as e:
+                p(f'ERROR: Pac {pac_id}')
+                raise
 
         p(c.command_queue)
         # Publish all commands
